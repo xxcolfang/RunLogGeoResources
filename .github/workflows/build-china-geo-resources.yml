@@ -47,9 +47,14 @@ jobs:
         run: |
           osmium tags-filter downloads/china.osm.pbf \
             r/admin_level=4 r/admin_level=5 r/admin_level=6 \
+            --omit-referenced \
+            --output downloads/china-admin-relations.osm.pbf --overwrite
+          osmium getid downloads/china.osm.pbf \
+            --id-osm-file downloads/china-admin-relations.osm.pbf \
+            --add-referenced \
             --output downloads/china-admin.osm.pbf --overwrite
           osmium check-refs --check-relations downloads/china-admin.osm.pbf
-          rm downloads/china.osm.pbf
+          rm downloads/china.osm.pbf downloads/china-admin-relations.osm.pbf
 
       - name: Build SQLite resources
         env:
