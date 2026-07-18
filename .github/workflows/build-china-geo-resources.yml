@@ -49,11 +49,19 @@ jobs:
             r/admin_level=4 r/admin_level=5 r/admin_level=6 \
             --omit-referenced \
             --output downloads/china-admin-relations.osm.pbf --overwrite
+          getid_status=0
           osmium getid downloads/china.osm.pbf \
             --id-osm-file downloads/china-admin-relations.osm.pbf \
             --add-referenced \
-            --output downloads/china-admin.osm.pbf --overwrite
-          osmium check-refs --check-relations downloads/china-admin.osm.pbf
+            --output downloads/china-admin.osm.pbf --overwrite || getid_status=$?
+          if [ "$getid_status" -gt 1 ]; then
+            exit "$getid_status"
+          fi
+          if [ "$getid_status" -eq 1 ]; then
+            echo "::warning::Some cross-extract relation members are unavailable; validating usable geometry"
+          fi
+          test -s downloads/china-admin.osm.pbf
+          osmium check-refs downloads/china-admin.osm.pbf
           rm downloads/china.osm.pbf downloads/china-admin-relations.osm.pbf
 
       - name: Build SQLite resources
