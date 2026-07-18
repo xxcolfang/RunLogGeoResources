@@ -1,0 +1,110 @@
+name: Build China geo resources
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_version:
+        description: Optional boundary version override
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-china-geo-resources
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes osmium-tool zip
+          python -m pip install --requirement requirements.txt
+
+      - name: Download source data
+        run: |
+          mkdir -p downloads build
+          curl --fail --location --retry 6 --retry-all-errors \
+            https://download.geofabrik.de/asia/china-latest.osm.pbf \
+            --output downloads/china.osm.pbf
+          curl --fail --location --retry 6 --retry-all-errors \
+            https://github.com/xxcolfang/RunLogGeoResources/releases/download/geo-resources/RunLogPeaks.sqlite \
+            --output downloads/RunLogPeaks.sqlite
+
+      - name: Keep administrative relations and referenced geometry
+        run: |
+          osmium tags-filter downloads/china.osm.pbf \
+            r/admin_level=4 r/admin_level=5 r/admin_level=6 \
+            --output downloads/china-admin.osm.pbf --overwrite
+          osmium check-refs --check-relations downloads/china-admin.osm.pbf
+          rm downloads/china.osm.pbf
+
+      - name: Build SQLite resources
+        env:
+          INPUT_VERSION: ${{ inputs.source_version }}
+        run: |
+          SOURCE_VERSION="${INPUT_VERSION:-osm-$(date -u +%Y-%m-%d)}"
+          python scripts/build_china_geo_resources.py \
+            --osm-pbf downloads/china-admin.osm.pbf \
+            --peak-db downloads/RunLogPeaks.sqlite \
+            --codes data/china-admin-codes-2023.csv \
+            --output-dir build \
+            --source-version "$SOURCE_VERSION" \
+            --location-index sparse_file_array,build/node-locations.idx
+          cp build/RunLogChinaPeaks.sqlite build/RunLogPeaks.sqlite
+          (cd build && zip -9 RunLogChinaPeaks.sqlite.zip RunLogChinaPeaks.sqlite)
+          (cd build && zip -9 RunLogChinaAdminBoundaries.sqlite.zip RunLogChinaAdminBoundaries.sqlite)
+
+      - name: Create manifest
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from datetime import datetime, timezone
+          from pathlib import Path
+          names = [
+              "RunLogChinaPeaks.sqlite.zip",
+              "RunLogChinaAdminBoundaries.sqlite.zip",
+              "RunLogPeaks.sqlite",
+          ]
+          assets = []
+          for name in names:
+              path = Path("build") / name
+              assets.append({
+                  "name": name,
+                  "size": path.stat().st_size,
+                  "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+              })
+          manifest = {
+              "schemaVersion": 1,
+              "generatedAt": datetime.now(timezone.utc).isoformat(),
+              "assets": assets,
+          }
+          Path("build/geo-resources-manifest.json").write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: geo-resources
+          make_latest: true
+          overwrite_files: true
+          files: |
+            build/RunLogChinaPeaks.sqlite.zip
+            build/RunLogChinaAdminBoundaries.sqlite.zip
+            build/RunLogPeaks.sqlite
+            build/geo-resources-manifest.json
